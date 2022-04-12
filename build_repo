@@ -1,0 +1,50 @@
+#!/bin/bash
+
+test -z "${OS_NAME}" && OS_NAME=centos:7.6
+IMAGE=${OS_NAME}
+
+test "${OS_NAME}" = "centos:7.6" && IMAGE=centos:7.6.1810
+
+
+function pack_in_docker()
+{
+    PACK_DIR=/pack
+    PKG_DIR=${PACK_DIR}/rpms
+    CACHE_DIR=${PACK_DIR}/cache
+    PWD=$(pwd)
+    PACKS=$*
+
+    sed -i "s|keepcache=.*|keepcache=1|g;s|cachedir=.*|cachedir=${CACHE_DIR}|g" /etc/yum.conf
+
+    set -x
+    yum clean all && yum makecache
+    yum install -y createrepo
+
+    mkdir -p ${PKG_DIR}
+
+    yum install -y  ${PACKS} || exit 255
+    cp -av ${CACHE_DIR}/*/packages ${PKG_DIR}
+
+    sed "s|@PACKAGE_NAMES@|$*|g" ${PWD}/install.sh >${PACK_DIR}/install.sh
+   
+    ( cd ${PKG_DIR}; createrepo .; )
+
+}
+
+function pack()
+{
+    local PWD NAME
+    PWD=`pwd`
+    test -z "$1" && { echo "No package name"; exit 254;}
+    # shellcheck disable=SC2086
+    NAME=$(echo ${OS_NAME}-$*|sed "s|[ \t\r\n:]\+|_|g")
+    PACK_DIR=pack_$(date +"%Y-%m-%d-%H")
+    mkdir -p "${PACK_DIR}/cache";
+    # shellcheck disable=SC2086
+    docker run -it --rm -v "${PWD}/${PACK_DIR}":/pack \
+            -v "${PWD}":"${PWD}" \
+            --workdir "${PWD}" -e OS_NAME=${OS_NAME} ${IMAGE} bash build_repo pack_in_docker $* \
+    && zip -r ${NAME}.zip ${PACK_DIR}/rpms ${PACK_DIR}/install.sh && echo "" && echo "Offline Package: ${NAME}.zip"
+}
+
+test -n "$1" && $*
